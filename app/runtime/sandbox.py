@@ -245,7 +245,7 @@ class SandboxExecutor:
             return self._token
         from azure.identity import AzureCliCredential, DefaultAzureCredential
 
-        for cred_cls in (AzureCliCredential, DefaultAzureCredential):
+        for cred_cls in (DefaultAzureCredential, AzureCliCredential):
             try:
                 cred = cred_cls()
                 token = cred.get_token(TOKEN_SCOPE)

@@ -11,7 +11,8 @@ export interface AuthCheckResponse {
 // -- Setup Status --------------------------------------------------------
 
 export interface SetupStatus {
-  azure?: { logged_in?: boolean; subscription?: string; tenant?: string }
+  auth_mode?: 'interactive' | 'managed_identity'
+  azure?: { logged_in?: boolean; subscription?: string; subscription_id?: string; user?: string; tenant?: string }
   copilot?: { authenticated?: boolean; username?: string }
   prerequisites_configured?: boolean
   telegram_configured?: boolean

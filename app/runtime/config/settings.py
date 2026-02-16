@@ -79,6 +79,16 @@ class Settings:
         """Re-read the ``.env`` file and environment variables."""
         e = self._read
 
+        # Managed Identity / ACA settings
+        self.auth_mode: str = e("OCTOCLAW_AUTH_MODE") or "interactive"
+        self.azure_subscription_id: str = e("AZURE_SUBSCRIPTION_ID")
+        self.azure_client_id: str = e("AZURE_CLIENT_ID")
+        self.ingress_url: str = e("OCTOCLAW_INGRESS_URL")
+        self.keyvault_use_private_endpoint: bool = (
+            e("KEYVAULT_USE_PRIVATE_ENDPOINT").lower() in ("1", "true", "yes")
+            if e("KEYVAULT_USE_PRIVATE_ENDPOINT") else False
+        )
+
         self.bot_app_id: str = e("BOT_APP_ID")
         self.bot_app_password: str = e("BOT_APP_PASSWORD")
         self.bot_app_tenant_id: str = e("BOT_APP_TENANT_ID")
@@ -215,6 +225,10 @@ class Settings:
     @property
     def acs_callback_token(self) -> str:
         return self._acs_callback_token
+
+    @property
+    def is_managed_identity(self) -> bool:
+        return self.auth_mode == "managed_identity"
 
     # -- helpers -----------------------------------------------------------
 

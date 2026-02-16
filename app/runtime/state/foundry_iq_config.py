@@ -58,12 +58,16 @@ class FoundryIQConfigStore:
     @property
     def is_configured(self) -> bool:
         c = self._config
+        has_endpoints = bool(c.search_endpoint and c.embedding_endpoint)
+        if not has_endpoints:
+            return False
+        # When provisioned or running under MI, API keys are not required
         if c.provisioned:
-            return bool(c.search_endpoint and c.embedding_endpoint)
-        return bool(
-            c.search_endpoint and c.search_api_key
-            and c.embedding_endpoint and c.embedding_api_key
-        )
+            return True
+        from ..config.settings import cfg
+        if cfg.is_managed_identity:
+            return True
+        return bool(c.search_api_key and c.embedding_api_key)
 
     @property
     def is_provisioned(self) -> bool:

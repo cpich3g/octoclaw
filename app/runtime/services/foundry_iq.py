@@ -43,7 +43,18 @@ def _get_entra_token() -> str:
 
 
 def _search_headers(config: FoundryIQConfigStore) -> dict[str, str]:
-    return {"api-key": config.config.search_api_key, "Content-Type": "application/json"}
+    c = config.config
+    if c.search_api_key:
+        return {"api-key": c.search_api_key, "Content-Type": "application/json"}
+    # Fall back to Entra ID (MI) auth for Azure AI Search
+    return {"Authorization": f"Bearer {_get_search_token()}", "Content-Type": "application/json"}
+
+
+def _get_search_token() -> str:
+    from azure.identity import DefaultAzureCredential  # type: ignore[import-untyped]
+
+    credential = DefaultAzureCredential()
+    return credential.get_token("https://search.azure.com/.default").token
 
 
 def _search_url(config: FoundryIQConfigStore, path: str) -> str:

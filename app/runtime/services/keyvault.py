@@ -38,6 +38,7 @@ class KeyVaultClient:
         self._url: str | None = None
         self._initialised = False
         self._ip_allowed = False
+        self._use_private_endpoint = False
 
     @property
     def enabled(self) -> bool:
@@ -60,7 +61,7 @@ class KeyVaultClient:
                 logger.info("Stored secret '%s' in Key Vault", name)
                 return make_ref(name)
             except Exception as exc:
-                if self._is_firewall_error(exc) and not self._ip_allowed:
+                if self._is_firewall_error(exc) and not self._ip_allowed and not self._use_private_endpoint:
                     if self._allow_current_ip():
                         self._ip_allowed = True
                         continue
@@ -112,11 +113,15 @@ class KeyVaultClient:
         self._client = None
         self._url = None
         self._ip_allowed = False
+        self._use_private_endpoint = False
 
     def _ensure_init(self) -> None:
         if self._initialised:
             return
         self._initialised = True
+        # Check if we should skip IP whitelisting (VNet/private endpoint scenario)
+        pe_flag = os.getenv("KEYVAULT_USE_PRIVATE_ENDPOINT", "").strip().lower()
+        self._use_private_endpoint = pe_flag in ("1", "true", "yes")
         url = os.getenv("KEY_VAULT_URL", "").strip().rstrip("/")
         if not url:
             try:
@@ -150,11 +155,11 @@ class KeyVaultClient:
             return self._client.get_secret(name).value or ""
         except Exception as exc:
             if self._is_firewall_error(exc):
-                if not self._ip_allowed:
+                if not self._ip_allowed and not self._use_private_endpoint:
                     if self._allow_current_ip():
                         self._ip_allowed = True
                         return self._get_secret(name)
-                elif _fw_retries < 2:
+                elif _fw_retries < 2 and not self._use_private_endpoint:
                     time.sleep(60)
                     return self._get_secret(name, _fw_retries=_fw_retries + 1)
             logger.error("Failed to resolve Key Vault secret '%s'", name)

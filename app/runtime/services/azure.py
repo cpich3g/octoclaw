@@ -135,8 +135,24 @@ class AzureCLI:
         return Result(success=success, message=result.stderr.strip())
 
     def account_info(self) -> dict[str, Any] | None:
+        if cfg.is_managed_identity:
+            return self._mi_account_info()
         account = self.json_cached("account", "show")
         return account if isinstance(account, dict) else None
+
+    def _mi_account_info(self) -> dict[str, Any] | None:
+        """Return synthetic account info when running under Managed Identity."""
+        sub_id = cfg.azure_subscription_id
+        if not sub_id:
+            logger.warning("[az] MI mode but AZURE_SUBSCRIPTION_ID not set")
+            return None
+        return {
+            "id": sub_id,
+            "name": "Managed Identity",
+            "user": {"name": "managed-identity", "type": "servicePrincipal"},
+            "state": "Enabled",
+            "isDefault": True,
+        }
 
     def login_device_code(self) -> dict[str, Any]:
         proc = subprocess.Popen(

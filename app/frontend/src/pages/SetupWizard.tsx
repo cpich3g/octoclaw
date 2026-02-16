@@ -12,8 +12,15 @@ interface VoiceConfig {
   [k: string]: unknown
 }
 
-const STEPS: { key: Step; label: string; description: string }[] = [
+const STEPS_INTERACTIVE: { key: Step; label: string; description: string }[] = [
   { key: 'azure', label: 'Azure', description: 'Sign in with Azure CLI to manage cloud resources' },
+  { key: 'github', label: 'GitHub', description: 'Authenticate with GitHub to power the AI agent' },
+  { key: 'config', label: 'Channels', description: 'Connect messaging channels like Telegram' },
+  { key: 'deploy', label: 'Bot', description: 'Provision Azure Bot Service and connect channels' },
+]
+
+const STEPS_MI: { key: Step; label: string; description: string }[] = [
+  { key: 'azure', label: 'Azure', description: 'Authenticated via Managed Identity' },
   { key: 'github', label: 'GitHub', description: 'Authenticate with GitHub to power the AI agent' },
   { key: 'config', label: 'Channels', description: 'Connect messaging channels like Telegram' },
   { key: 'deploy', label: 'Bot', description: 'Provision Azure Bot Service and connect channels' },
@@ -55,6 +62,8 @@ export default function SetupWizard() {
 
   const setupDone = status?.azure?.logged_in && status?.copilot?.authenticated && status?.bot_configured
   const botDeployed = !!status?.bot_deployed
+  const isMI = status?.auth_mode === 'managed_identity'
+  const STEPS = isMI ? STEPS_MI : STEPS_INTERACTIVE
 
   /** Show code, start countdown, open URL after 3s, then poll. */
   const startDeviceFlow = (code: string, url: string, setDevice: typeof setAzureDevice, openUrl: string) => {
@@ -196,6 +205,17 @@ export default function SetupWizard() {
           {currentStep === 'azure' && (
             <div className="setup__panel">
               <h2>Azure</h2>
+              {isMI ? (
+                <div className="setup__done">
+                  <span className="badge badge--ok">Managed Identity</span>
+                  <p className="text-muted">Authenticated via Azure Managed Identity. No manual login required.</p>
+                  {status?.azure?.subscription_id && (
+                    <p className="text-muted">Subscription: {status.azure.subscription_id}</p>
+                  )}
+                  <button className="btn btn--secondary" onClick={() => setCurrentStep('github')}>Continue</button>
+                </div>
+              ) : (
+                <>
               <p>Sign in to Azure to enable cloud resource management, infrastructure provisioning, and bot deployment.</p>
               {azureDevice ? (
                 <div className="setup__device-code">
@@ -225,6 +245,8 @@ export default function SetupWizard() {
                 <button className="btn btn--primary" onClick={handleAzureLogin} disabled={loading.azure}>
                   {loading.azure ? 'Starting...' : 'Sign in with Azure CLI'}
                 </button>
+              )}
+                </>
               )}
             </div>
           )}
@@ -311,7 +333,11 @@ export default function SetupWizard() {
                 <>
                   <p>Deploy the Azure Bot Service to enable Telegram and other messaging channels. This will:</p>
                   <ul className="setup__deploy-list">
-                    <li>Start a Cloudflare tunnel to expose your bot</li>
+                    {isMI ? (
+                      <li>Configure the Azure Bot Service using ACA ingress</li>
+                    ) : (
+                      <li>Start a Cloudflare tunnel to expose your bot</li>
+                    )}
                     <li>Create an Azure Bot Service with an App Registration</li>
                     {status?.telegram_configured && <li>Connect Telegram as a messaging channel</li>}
                   </ul>

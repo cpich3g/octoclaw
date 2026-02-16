@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from aiohttp import web
 
@@ -50,6 +51,19 @@ class SetupRoutes:
         self._prerequisites_routes = PrerequisitesRoutes(az, infra_store, deploy_store)
         self._preflight_routes = PreflightRoutes(tunnel, infra_store)
 
+    # Known env vars that can be imported via /api/setup/import-config
+    _IMPORTABLE_KEYS: frozenset[str] = frozenset({
+        "AZURE_SUBSCRIPTION_ID", "OCTOCLAW_AUTH_MODE", "AZURE_CLIENT_ID",
+        "OCTOCLAW_INGRESS_URL", "KEY_VAULT_URL", "KEY_VAULT_NAME", "KEY_VAULT_RG",
+        "BOT_APP_ID", "BOT_APP_PASSWORD", "BOT_APP_TENANT_ID",
+        "BOT_RESOURCE_GROUP", "BOT_NAME",
+        "ACS_CONNECTION_STRING", "ACS_SOURCE_NUMBER",
+        "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_REALTIME_DEPLOYMENT",
+        "COPILOT_MODEL", "COPILOT_AGENT", "GITHUB_TOKEN",
+        "KEYVAULT_USE_PRIVATE_ENDPOINT",
+    })
+
     def register(self, router: web.UrlDispatcher) -> None:
         r = router
         r.add_get("/api/setup/status", self.status)
@@ -72,6 +86,7 @@ class SetupRoutes:
         r.add_post("/api/setup/channels/telegram/config", self.save_telegram_config)
         r.add_post("/api/setup/channels/telegram/remove", self.remove_telegram_config)
         r.add_post("/api/setup/configuration/save", self.save_configuration)
+        r.add_post("/api/setup/import-config", self.import_config)
         r.add_get("/api/setup/infra/status", self.infra_status)
         r.add_post("/api/setup/infra/deploy", self.infra_deploy)
         r.add_post("/api/setup/infra/decommission", self.infra_decommission)
@@ -91,6 +106,7 @@ class SetupRoutes:
         kv_url = cfg.env.read("KEY_VAULT_URL") or ""
 
         return web.json_response({
+            "auth_mode": cfg.auth_mode,
             "azure": {
                 "logged_in": account is not None,
                 "user": account.get("user", {}).get("name") if account else None,
@@ -117,6 +133,17 @@ class SetupRoutes:
     # -- Azure --
 
     async def azure_login(self, _req: web.Request) -> web.Response:
+        if cfg.is_managed_identity:
+            account = self._az.account_info()
+            if account:
+                return web.json_response({
+                    "status": "already_logged_in",
+                    "user": "managed-identity",
+                    "subscription": account.get("name"),
+                    "message": "Authenticated via Managed Identity",
+                })
+            return _error("Managed Identity is configured but AZURE_SUBSCRIPTION_ID is not set", 400)
+
         account = self._az.account_info()
         if account:
             return web.json_response({
@@ -353,6 +380,30 @@ class SetupRoutes:
             "status": "ok", "steps": steps,
             "message": "Configuration saved securely",
         })
+
+    # -- Import config --
+
+    async def import_config(self, req: web.Request) -> web.Response:
+        """Bulk-import resource endpoints/IDs from a JSON blob into .env."""
+        body = await req.json()
+        accepted: dict[str, str] = {}
+        rejected: list[str] = []
+        for key, value in body.items():
+            if key in self._IMPORTABLE_KEYS:
+                accepted[key] = str(value).strip()
+            else:
+                rejected.append(key)
+        if not accepted:
+            return _error("No importable keys found in request", 400)
+        cfg.write_env(**accepted)
+        result: dict[str, Any] = {
+            "status": "ok",
+            "imported": list(accepted.keys()),
+            "message": f"Imported {len(accepted)} setting(s)",
+        }
+        if rejected:
+            result["rejected"] = rejected
+        return web.json_response(result)
 
     # -- Infrastructure --
 

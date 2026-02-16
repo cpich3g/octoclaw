@@ -18,6 +18,13 @@ fi
 # Azure CLI config on persistent volume so az login survives restarts
 export AZURE_CONFIG_DIR="$DATA_DIR/.azure"
 
+# --- Managed Identity Auto-Detection -------------------------------------
+# ACA injects IDENTITY_ENDPOINT when a managed identity is assigned.
+if [[ -n "${IDENTITY_ENDPOINT:-}" && -z "${OCTOCLAW_AUTH_MODE:-}" ]]; then
+    export OCTOCLAW_AUTH_MODE="managed_identity"
+    echo "Managed Identity detected (ACA) — using MI authentication."
+fi
+
 # Load .env from the persistent data volume
 if [[ -f "$DATA_DIR/.env" ]]; then
     set -a

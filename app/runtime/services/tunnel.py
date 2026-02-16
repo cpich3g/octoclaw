@@ -25,10 +25,18 @@ class CloudflareTunnel:
 
     @property
     def is_active(self) -> bool:
+        # Active if a cloudflared subprocess is running OR we have a static ingress URL
+        if self.url and self._proc is None:
+            # Static ingress URL mode (ACA)
+            from ..config.settings import cfg
+            return bool(cfg.ingress_url)
         return self._proc is not None and self._proc.poll() is None
 
     def stop(self) -> Result:
         """Terminate the tunnel subprocess."""
+        # Static ingress URL mode — nothing to stop
+        if self._proc is None and self.url:
+            return Result.ok("Using static ingress URL — nothing to stop")
         if not self.is_active:
             return Result.ok("Tunnel is not running")
         try:
@@ -43,6 +51,14 @@ class CloudflareTunnel:
         return Result.ok("Tunnel stopped")
 
     def start(self, port: int) -> Result:
+        # When running on ACA with built-in ingress, skip cloudflared entirely
+        from ..config.settings import cfg
+        ingress_url = cfg.ingress_url
+        if ingress_url:
+            self.url = ingress_url.rstrip("/")
+            logger.info("Using ACA ingress URL: %s", self.url)
+            return Result.ok("Using ACA ingress", value=self.url)
+
         if self.is_active:
             return Result.ok("Tunnel already running", value=self.url)
         if not shutil.which("cloudflared"):
