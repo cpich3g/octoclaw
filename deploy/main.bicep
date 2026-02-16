@@ -58,6 +58,16 @@ param botAppPassword string = ''
 @description('Bot App Tenant ID')
 param botAppTenantId string = ''
 
+@description('ACR login server (e.g. myacr.azurecr.io)')
+param acrLoginServer string = ''
+
+@description('ACR username')
+param acrUsername string = ''
+
+@description('ACR password')
+@secure()
+param acrPassword string = ''
+
 // ── Variables ───────────────────────────────────────────────────────────
 
 var uniqueSuffix = uniqueString(resourceGroup().id, baseName)
@@ -148,6 +158,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   location: location
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
+  properties: {
+    allowSharedKeyAccess: true
+  }
 }
 
 resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-01-01' = {
@@ -273,7 +286,15 @@ resource acaApp 'Microsoft.App/containerApps@2024-03-01' = {
         { name: 'github-token', value: !empty(githubToken) ? githubToken : 'placeholder' }
         { name: 'bot-app-password', value: !empty(botAppPassword) ? botAppPassword : 'placeholder' }
         { name: 'acs-connection-string', value: !empty(acsConnectionString) ? acsConnectionString : 'placeholder' }
+        { name: 'acr-password', value: !empty(acrPassword) ? acrPassword : 'placeholder' }
       ]
+      registries: !empty(acrLoginServer) ? [
+        {
+          server: acrLoginServer
+          username: acrUsername
+          passwordSecretRef: 'acr-password'
+        }
+      ] : []
     }
     template: {
       containers: [
