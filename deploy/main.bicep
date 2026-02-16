@@ -1,6 +1,7 @@
 // OctoClaw — Azure Container Apps deployment with Managed Identity
-// Deploys: VNet, ACA Environment, Container App, Azure Files, Key Vault,
+// Deploys: VNet, ACA Environment, Container App, Azure Files,
 //          User-Assigned Managed Identity, and RBAC role assignments.
+// Optionally creates Key Vault if no existing one is provided.
 
 targetScope = 'resourceGroup'
 
@@ -17,7 +18,7 @@ param containerImage string
 
 @description('GitHub token for Copilot CLI authentication')
 @secure()
-param githubToken string
+param githubToken string = ''
 
 @description('CPU cores for the container app')
 param cpuCores string = '1.0'
@@ -31,11 +32,13 @@ param minReplicas int = 1
 @description('Maximum replicas')
 param maxReplicas int = 1
 
-// Optional pre-existing resource endpoints
-@description('Pre-existing Key Vault URL (leave empty to create new)')
+@description('Create a new Key Vault (false = skip KV entirely)')
+param createKeyVault bool = false
+
+@description('Pre-existing Key Vault URL (used when createKeyVault is false)')
 param existingKeyVaultUrl string = ''
 
-@description('Pre-existing Azure OpenAI endpoint')
+@description('Pre-existing Azure OpenAI / Foundry endpoint')
 param azureOpenAIEndpoint string = ''
 
 @description('Pre-existing Azure AI Search endpoint')
@@ -101,16 +104,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
               }
             }
           ]
-          serviceEndpoints: [
-            { service: 'Microsoft.Storage' }
-            { service: 'Microsoft.KeyVault' }
-          ]
-        }
-      }
-      {
-        name: 'private-endpoints'
-        properties: {
-          addressPrefix: '10.0.2.0/24'
         }
       }
     ]
@@ -155,17 +148,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   location: location
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
-  properties: {
-    networkAcls: {
-      defaultAction: 'Deny'
-      virtualNetworkRules: [
-        {
-          id: vnet.properties.subnets[0].id
-          action: 'Allow'
-        }
-      ]
-    }
-  }
 }
 
 resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-01-01' = {
@@ -196,31 +178,21 @@ resource acaStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
   }
 }
 
-// ── Key Vault (created only if no existing one is provided) ─────────────
+// ── Key Vault (only when createKeyVault=true) ───────────────────────────
 
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (empty(existingKeyVaultUrl)) {
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (createKeyVault) {
   name: kvName
   location: location
   properties: {
     sku: { family: 'A', name: 'standard' }
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
-    networkAcls: {
-      defaultAction: 'Deny'
-      virtualNetworkRules: [
-        {
-          id: vnet.properties.subnets[0].id
-        }
-      ]
-    }
   }
 }
 
-// ── RBAC Assignments ────────────────────────────────────────────────────
-
-// Key Vault Secrets Officer for MI
-resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(existingKeyVaultUrl)) {
-  name: guid(keyVault.id, managedIdentity.id, keyVaultSecretsOfficerRole)
+// Key Vault Secrets Officer for MI (only when KV is created here)
+resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createKeyVault) {
+  name: guid(resourceGroup().id, identityName, keyVaultSecretsOfficerRole, 'kv')
   scope: keyVault
   properties: {
     principalId: managedIdentity.properties.principalId
@@ -229,7 +201,9 @@ resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
-// Cognitive Services OpenAI User (if AOAI endpoint provided)
+// ── RBAC Assignments (resource-group scoped) ────────────────────────────
+
+// Cognitive Services OpenAI User — for Azure OpenAI / Foundry models
 resource aoaiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(azureOpenAIEndpoint)) {
   name: guid(resourceGroup().id, managedIdentity.id, cognitiveServicesOpenAIUserRole)
   scope: resourceGroup()
@@ -240,7 +214,7 @@ resource aoaiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01'
   }
 }
 
-// Search Index Data Contributor (if AI Search endpoint provided)
+// Search Index Data Contributor — for Azure AI Search
 resource searchRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(azureAISearchEndpoint)) {
   name: guid(resourceGroup().id, managedIdentity.id, searchIndexDataContributorRole)
   scope: resourceGroup()
@@ -253,7 +227,29 @@ resource searchRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
 
 // ── Container App ───────────────────────────────────────────────────────
 
-var effectiveKvUrl = empty(existingKeyVaultUrl) ? keyVault.properties.vaultUri : existingKeyVaultUrl
+var kvUrl = createKeyVault ? keyVault.properties.vaultUri : existingKeyVaultUrl
+
+// Build env vars list — only include non-empty secret refs
+var baseEnv = [
+  { name: 'OCTOCLAW_AUTH_MODE', value: 'managed_identity' }
+  { name: 'AZURE_CLIENT_ID', value: managedIdentity.properties.clientId }
+  { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+  { name: 'OCTOCLAW_DATA_DIR', value: '/data' }
+  { name: 'ADMIN_PORT', value: '8080' }
+  { name: 'BOT_APP_ID', value: botAppId }
+  { name: 'BOT_APP_TENANT_ID', value: botAppTenantId }
+  { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAIEndpoint }
+]
+
+var kvEnv = !empty(kvUrl) ? [{ name: 'KEY_VAULT_URL', value: kvUrl }] : []
+var peEnv = !empty(kvUrl) ? [{ name: 'KEYVAULT_USE_PRIVATE_ENDPOINT', value: 'true' }] : []
+
+// Secret-backed env vars (ACA requires secrets to be defined even if empty)
+var secretEnv = [
+  { name: 'GITHUB_TOKEN', secretRef: 'github-token' }
+  { name: 'BOT_APP_PASSWORD', secretRef: 'bot-app-password' }
+  { name: 'ACS_CONNECTION_STRING', secretRef: 'acs-connection-string' }
+]
 
 resource acaApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: acaAppName
@@ -274,9 +270,9 @@ resource acaApp 'Microsoft.App/containerApps@2024-03-01' = {
         allowInsecure: false
       }
       secrets: [
-        { name: 'github-token', value: githubToken }
-        { name: 'bot-app-password', value: botAppPassword }
-        { name: 'acs-connection-string', value: acsConnectionString }
+        { name: 'github-token', value: !empty(githubToken) ? githubToken : 'placeholder' }
+        { name: 'bot-app-password', value: !empty(botAppPassword) ? botAppPassword : 'placeholder' }
+        { name: 'acs-connection-string', value: !empty(acsConnectionString) ? acsConnectionString : 'placeholder' }
       ]
     }
     template: {
@@ -288,21 +284,7 @@ resource acaApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(cpuCores)
             memory: memory
           }
-          env: [
-            { name: 'OCTOCLAW_AUTH_MODE', value: 'managed_identity' }
-            { name: 'AZURE_CLIENT_ID', value: managedIdentity.properties.clientId }
-            { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
-            { name: 'KEY_VAULT_URL', value: effectiveKvUrl }
-            { name: 'KEYVAULT_USE_PRIVATE_ENDPOINT', value: 'true' }
-            { name: 'OCTOCLAW_DATA_DIR', value: '/data' }
-            { name: 'ADMIN_PORT', value: '8080' }
-            { name: 'GITHUB_TOKEN', secretRef: 'github-token' }
-            { name: 'BOT_APP_ID', value: botAppId }
-            { name: 'BOT_APP_PASSWORD', secretRef: 'bot-app-password' }
-            { name: 'BOT_APP_TENANT_ID', value: botAppTenantId }
-            { name: 'ACS_CONNECTION_STRING', secretRef: 'acs-connection-string' }
-            { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAIEndpoint }
-          ]
+          env: concat(baseEnv, kvEnv, peEnv, secretEnv)
           volumeMounts: [
             {
               volumeName: 'data'
@@ -332,5 +314,5 @@ output appFqdn string = acaApp.properties.configuration.ingress.fqdn
 output appUrl string = 'https://${acaApp.properties.configuration.ingress.fqdn}'
 output managedIdentityClientId string = managedIdentity.properties.clientId
 output managedIdentityPrincipalId string = managedIdentity.properties.principalId
-output keyVaultUrl string = effectiveKvUrl
+output keyVaultUrl string = kvUrl
 output storageAccountName string = storageAccount.name

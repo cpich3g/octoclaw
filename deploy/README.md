@@ -7,13 +7,13 @@ Deploy OctoClaw on Azure Container Apps with Managed Identity, VNet integration,
 | Resource | Purpose |
 |----------|---------|
 | User-Assigned Managed Identity | Authentication to all Azure services (no passwords) |
-| VNet (10.0.0.0/16) | Network isolation for ACA, Storage, Key Vault |
+| VNet (10.0.0.0/16) | Network isolation for ACA |
 | ACA Environment | Container Apps hosting environment |
 | Container App | OctoClaw application with external HTTPS ingress |
 | Storage Account + File Share | Persistent data at `/data` (sessions, memory, config) |
-| Key Vault | Secret storage (optional — can use existing) |
 | Log Analytics Workspace | Container logs |
-| RBAC Role Assignments | MI → KV Secrets Officer, Cognitive Services User, Search Contributor |
+| Key Vault (optional) | Secret storage — set `createKeyVault=true` or use existing |
+| RBAC Role Assignments | MI → Cognitive Services OpenAI User, Search Index Data Contributor |
 
 ## Prerequisites
 
@@ -26,56 +26,56 @@ Deploy OctoClaw on Azure Container Apps with Managed Identity, VNet integration,
 
 ```bash
 # Create the resource group
-az group create --name octoclaw-rg --location eastus
+az group create --name rg-octoclaw --location swedencentral
 
-# Deploy
+# Deploy (minimal — ACA + Storage + VNet + MI only)
 az deployment group create \
-  --resource-group octoclaw-rg \
-  --template-file main.bicep \
+  --resource-group rg-octoclaw \
+  --template-file deploy/main.bicep \
   --parameters \
-    containerImage='ghcr.io/your-org/octoclaw:latest' \
-    githubToken='ghp_...'
+    containerImage='your-registry.azurecr.io/octoclaw:latest' \
+    location='swedencentral'
 
 # Get the app URL
 az deployment group show \
-  --resource-group octoclaw-rg \
+  --resource-group rg-octoclaw \
   --name main \
   --query properties.outputs.appUrl.value -o tsv
 ```
 
-## Using Pre-Existing Resources
+## With Existing Foundry / AI Search Resources
 
-Pass existing resource endpoints to skip creation:
+Pass existing resource endpoints to configure RBAC automatically:
 
 ```bash
 az deployment group create \
-  --resource-group octoclaw-rg \
-  --template-file main.bicep \
+  --resource-group rg-octoclaw \
+  --template-file deploy/main.bicep \
   --parameters \
-    containerImage='ghcr.io/your-org/octoclaw:latest' \
-    githubToken='ghp_...' \
-    existingKeyVaultUrl='https://my-kv.vault.azure.net' \
+    containerImage='your-registry.azurecr.io/octoclaw:latest' \
+    location='swedencentral' \
     azureOpenAIEndpoint='https://my-aoai.openai.azure.com' \
     azureAISearchEndpoint='https://my-search.search.windows.net' \
-    botAppId='00000000-0000-0000-0000-000000000000' \
-    botAppPassword='...' \
-    botAppTenantId='00000000-0000-0000-0000-000000000000'
+    githubToken='ghp_...'
 ```
 
-> **Note:** When using existing resources, ensure the Managed Identity (output: `managedIdentityPrincipalId`) has the appropriate RBAC roles on those resources.
+> **Note:** The RBAC assignments above are scoped to the deployment resource group.
+> If your Foundry/Search resources are in a different RG, you must manually assign
+> `Cognitive Services OpenAI User` and `Search Index Data Contributor` roles to the
+> MI principal (output: `managedIdentityPrincipalId`) on those resources.
 
 ## Post-Deployment
 
-After deployment, update the `OCTOCLAW_INGRESS_URL` on the container app to its own FQDN so the bot endpoint URL is correctly formed:
+Update the container app with its own ingress URL so bot endpoint routing works:
 
 ```bash
 APP_URL=$(az deployment group show \
-  --resource-group octoclaw-rg --name main \
+  --resource-group rg-octoclaw --name main \
   --query properties.outputs.appUrl.value -o tsv)
 
 az containerapp update \
   --name octoclaw-app \
-  --resource-group octoclaw-rg \
+  --resource-group rg-octoclaw \
   --set-env-vars "OCTOCLAW_INGRESS_URL=$APP_URL"
 ```
 
@@ -87,9 +87,9 @@ Internet ──► ACA External Ingress (HTTPS)
                 ▼
          ┌──────────────┐
          │  OctoClaw     │──► Azure Files (/data)
-         │  Container    │──► Key Vault (MI auth)
-         │  App          │──► Azure OpenAI (MI auth)
-         └──────────────┘──► Azure AI Search (MI auth)
+         │  Container    │──► Azure OpenAI / Foundry (MI auth)
+         │  App          │──► Azure AI Search (MI auth)
+         └──────────────┘
                 │
            VNet (10.0.0.0/16)
 ```
