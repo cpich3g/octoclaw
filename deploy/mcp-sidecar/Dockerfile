@@ -4,7 +4,7 @@ FROM node:22-slim
 
 # System deps for Playwright (chromium) and Azure MCP Server (.NET)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates \
+    bash curl ca-certificates \
     libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
     libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
@@ -15,7 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g supergateway@latest \
     @playwright/mcp@latest \
     @azure/mcp@latest \
-    @modelcontextprotocol/server-sequential-thinking@latest
+    @modelcontextprotocol/server-sequential-thinking@latest \
+    alpaca-mcp@latest \
+    @coingecko/coingecko-mcp@latest \
+    @iflow-mcp/panth1823-f1-mcp-server@latest
 
 # Install Playwright Chromium (from the globally installed @playwright/mcp)
 RUN cd "$(npm root -g)/@playwright/mcp" \
@@ -38,4 +41,4 @@ COPY auth-proxy.js /auth-proxy.js
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-CMD ["/entrypoint.sh"]
+CMD ["/bin/bash", "/entrypoint.sh"]

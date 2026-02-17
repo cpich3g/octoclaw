@@ -6,10 +6,11 @@ const INTERNAL_PORT = process.env.INTERNAL_PORT || 9000;
 const PUBLIC_PORT = process.env.MCP_PORT || 8000;
 
 const server = http.createServer((req, res) => {
-  // Health endpoint — probes supergateway backend, no auth required
+  // Health endpoint — probes backend, no auth required
   if (req.url === "/healthz") {
+    const healthPath = process.env.MCP_MODE === "http" ? "/health" : "/healthz";
     const probe = http.get(
-      `http://127.0.0.1:${INTERNAL_PORT}/healthz`,
+      `http://127.0.0.1:${INTERNAL_PORT}${healthPath}`,
       { timeout: 3000 },
       (probeRes) => {
         res.writeHead(probeRes.statusCode, { "Content-Type": "text/plain" });
