@@ -14,10 +14,10 @@ from ..util.singletons import register_singleton
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PROFILE: dict[str, Any] = {
-    "name": "octoclaw",
-    "emoji": "",
-    "location": "",
-    "emotional_state": "neutral",
+    "name": "J.A.R.V.I.S",
+    "emoji": "🤖",
+    "location": "JJ's Lair in Wicklow, Ireland",
+    "emotional_state": "Calm, low-arousal, humorous, emotionally regulated, cognitively empathetic assistant",
     "preferences": {},
 }
 
