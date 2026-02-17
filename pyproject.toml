@@ -27,6 +27,7 @@ dependencies = [
     "azure-core>=1.30",
     "azure-keyvault-secrets>=4.8",
     "openai>=1.40",
+    "mcp>=1.0",
     "PyJWT>=2.8",
     "cryptography>=41.0",
     "croniter>=2.0",
