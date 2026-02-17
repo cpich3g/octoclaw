@@ -152,6 +152,7 @@ class FoundryBackend(AgentBackend):
 
     def __init__(self) -> None:
         self._client: Any = None
+        self._deployments_cache: list[dict] | None = None
 
     async def start(self) -> None:
         self._client = _get_openai_client()
@@ -204,6 +205,11 @@ class FoundryBackend(AgentBackend):
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
+
+                # Reasoning/thinking tokens (Azure OpenAI extra field)
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning and on_event:
+                    on_event("reasoning", {"text": reasoning})
 
                 # Text content
                 if delta.content:
@@ -259,35 +265,72 @@ class FoundryBackend(AgentBackend):
         pass  # No cleanup needed for in-memory sessions
 
     async def list_models(self) -> list[dict]:
-        """List available models from Azure OpenAI / AI Services.
+        """List deployed models via the Azure Resource Manager API.
 
-        For AIServices (Foundry) resources, the deployment name equals
-        the model name, so we can use the /openai/models endpoint directly.
-        We filter to only chat-capable models (exclude embeddings, tts, etc).
+        Only returns models that are actually deployed and ready.
+        Results are cached after the first call.
         """
-        if not self._client:
+        if self._deployments_cache is not None:
+            return self._deployments_cache
+
+        if not cfg.azure_openai_endpoint or not cfg.azure_subscription_id:
             return []
         try:
-            result = await self._client.models.list()
-            # Filter to chat-capable models only
-            skip_prefixes = (
-                "dall-e", "tts", "whisper", "text-embedding", "text-search",
-                "text-similarity", "code-search", "babbage", "curie", "davinci",
-                "ada", "gpt-35-turbo-instruct", "sora", "aoai-sora",
-                "gpt-image", "FLUX", "Stable-", "Cohere-embed",
-                "Cohere-rerank", "embed-", "gpt-realtime", "gpt-audio",
-                "gpt-4o-realtime", "gpt-4o-mini-realtime",
-                "gpt-4o-audio", "gpt-4o-mini-audio", "gpt-4o-mini-tts",
-                "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
-                "computer-use", "gpt-4o-canvas", "mistral-document",
+            import httpx
+            from azure.identity.aio import DefaultAzureCredential
+
+            account = cfg.azure_openai_endpoint.split("//")[1].split(".")[0]
+            sub_id = cfg.azure_subscription_id
+
+            cred = DefaultAzureCredential()
+            token = await cred.get_token("https://management.azure.com/.default")
+            await cred.close()
+            headers = {"Authorization": f"Bearer {token.token}"}
+
+            # Find the Cognitive Services account to get its resource group
+            find_url = (
+                f"https://management.azure.com/subscriptions/{sub_id}"
+                f"/resources?$filter=resourceType eq 'Microsoft.CognitiveServices/accounts'"
+                f"&api-version=2021-04-01"
             )
-            return [
-                {"id": m.id, "name": m.id, "policy": "enabled"}
-                for m in result.data
-                if m.id and not any(m.id.startswith(p) for p in skip_prefixes)
+            async with httpx.AsyncClient() as http:
+                resp = await http.get(find_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                resources = resp.json().get("value", [])
+
+            # Match by account name in the resource ID
+            resource_id = None
+            for r in resources:
+                if r.get("name", "").lower() == account.lower():
+                    resource_id = r["id"]
+                    break
+
+            if not resource_id:
+                logger.warning("[foundry] could not find resource for %s", account)
+                return []
+
+            # List deployments
+            deploy_url = (
+                f"https://management.azure.com{resource_id}"
+                f"/deployments?api-version=2024-10-01"
+            )
+            async with httpx.AsyncClient() as http:
+                resp = await http.get(deploy_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                deployments = resp.json().get("value", [])
+
+            self._deployments_cache = [
+                {
+                    "id": d["name"],
+                    "name": f"{d['name']} ({d['properties']['model']['name']})",
+                    "policy": "enabled",
+                }
+                for d in deployments
+                if d.get("properties", {}).get("provisioningState") == "Succeeded"
             ]
+            return self._deployments_cache
         except Exception as exc:
-            logger.warning("[foundry] failed to list models: %s", exc)
+            logger.warning("[foundry] failed to list deployments: %s", exc)
             return []
 
     async def run_one_shot(
