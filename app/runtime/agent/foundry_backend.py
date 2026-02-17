@@ -259,17 +259,48 @@ class FoundryBackend(AgentBackend):
         pass  # No cleanup needed for in-memory sessions
 
     async def list_models(self) -> list[dict]:
+        """List Azure OpenAI deployments (not model IDs).
+
+        The openai SDK's models.list() returns model IDs (e.g.
+        ``gpt-5.2-2025-12-11``) which can't be used for inference.
+        Azure OpenAI requires **deployment names**, so we call the
+        deployments REST endpoint directly.
+        """
         if not self._client:
             return []
         try:
-            result = await self._client.models.list()
+            import httpx
+
+            url = f"{cfg.azure_openai_endpoint.rstrip('/')}/openai/deployments?api-version=2024-12-01-preview"
+
+            # Reuse the client's auth — get a token
+            api_key = cfg.azure_openai_api_key
+            if api_key:
+                headers = {"api-key": api_key}
+            else:
+                from azure.identity.aio import DefaultAzureCredential
+                cred = DefaultAzureCredential()
+                token = await cred.get_token("https://cognitiveservices.azure.com/.default")
+                headers = {"Authorization": f"Bearer {token.token}"}
+                await cred.close()
+
+            async with httpx.AsyncClient() as http:
+                resp = await http.get(url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                data = resp.json().get("data", [])
+
             return [
-                {"id": m.id, "name": m.id, "policy": "enabled"}
-                for m in result.data
-                if m.id and not m.id.startswith("dall-e")
+                {
+                    "id": d["id"],  # deployment name — this is what inference needs
+                    "name": f"{d['id']} ({d.get('model', '')})",
+                    "policy": "enabled",
+                }
+                for d in data
+                if d.get("id") and d.get("status") == "succeeded"
+                and not d.get("id", "").startswith("dall-e")
             ]
         except Exception as exc:
-            logger.warning("[foundry] failed to list models: %s", exc)
+            logger.warning("[foundry] failed to list deployments: %s", exc)
             return []
 
     async def run_one_shot(
