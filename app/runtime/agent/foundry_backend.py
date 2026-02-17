@@ -121,6 +121,7 @@ class FoundrySession:
         system_message: str,
         tools: list[Any],
         mcp_manager: McpClientManager | None = None,
+        native_mcp_tools: list[dict] | None = None,
     ) -> None:
         self.model = model
         self.instructions = system_message
@@ -134,11 +135,17 @@ class FoundrySession:
             self._tool_map[name] = t
 
         # Build Responses API tool definitions
-        self.response_tools = _tools_to_responses_format(tools) if tools else []
+        self.response_tools: list[dict] = _tools_to_responses_format(tools) if tools else []
+
+        # Add stdio MCP tools as function tools (client-managed)
         if mcp_manager:
             self.response_tools.extend(
                 _mcp_tools_to_responses_format(mcp_manager.openai_tools)
             )
+
+        # Add HTTP/SSE MCP servers as native mcp tools (server-managed by Azure)
+        if native_mcp_tools:
+            self.response_tools.extend(native_mcp_tools)
 
     async def call_tool(self, name: str, arguments: str) -> str:
         """Execute a tool by name. Routes MCP first, then local tools."""
@@ -205,20 +212,45 @@ class FoundryBackend(AgentBackend):
         system_content = system_msg.get("content", "") if isinstance(system_msg, dict) else ""
         tools = config.get("tools", [])
 
+        # Split MCP servers: HTTP/SSE → native Responses API, stdio → McpClientManager
         mcp_manager: McpClientManager | None = None
-        mcp_servers = config.get("mcp_servers")
-        if mcp_servers:
+        native_mcp_tools: list[dict] = []
+        mcp_servers = config.get("mcp_servers") or {}
+
+        stdio_servers: dict[str, dict] = {}
+        for name, srv in mcp_servers.items():
+            stype = srv.get("type", "local")
+            if stype in ("http", "sse"):
+                # Native: Azure OpenAI connects to the MCP server directly
+                tool_def: dict[str, Any] = {
+                    "type": "mcp",
+                    "server_label": name,
+                    "server_url": srv["url"],
+                    "require_approval": "never",
+                }
+                if srv.get("headers"):
+                    tool_def["headers"] = srv["headers"]
+                if srv.get("description"):
+                    tool_def["server_description"] = srv["description"]
+                native_mcp_tools.append(tool_def)
+                logger.info("[foundry] MCP native: %s → %s", name, srv["url"])
+            else:
+                stdio_servers[name] = srv
+
+        if stdio_servers:
             mcp_manager = McpClientManager()
             try:
-                await mcp_manager.start(mcp_servers)
-                logger.info("[foundry] MCP: %d tools from %d servers",
+                await mcp_manager.start(stdio_servers)
+                logger.info("[foundry] MCP stdio: %d tools from %d servers",
                             len(mcp_manager.tool_names),
                             len(mcp_manager._group.sessions) if mcp_manager._group else 0)
             except Exception as exc:
-                logger.warning("[foundry] MCP startup failed: %s", exc)
+                logger.warning("[foundry] MCP stdio startup failed: %s", exc)
                 mcp_manager = None
 
-        return FoundrySession(model, system_content, tools, mcp_manager)
+        return FoundrySession(
+            model, system_content, tools, mcp_manager, native_mcp_tools or None
+        )
 
     async def send(
         self,
@@ -276,6 +308,22 @@ class FoundryBackend(AgentBackend):
                             "call_id": item.call_id,
                             "name": item.name,
                             "arguments": item.arguments,
+                        })
+                    elif getattr(item, "type", None) == "mcp_call":
+                        # Native MCP call completed (handled server-side by Azure)
+                        if on_event:
+                            on_event("tool_done", {
+                                "tool": getattr(item, "name", "mcp"),
+                                "call_id": getattr(item, "id", ""),
+                                "result": "(handled by Azure)",
+                            })
+
+                elif etype == "response.mcp_call.in_progress":
+                    if on_event:
+                        name = getattr(event, "name", None) or "mcp"
+                        on_event("tool_start", {
+                            "tool": name,
+                            "call_id": getattr(event, "item_id", ""),
                         })
 
                 elif etype == "response.completed":
