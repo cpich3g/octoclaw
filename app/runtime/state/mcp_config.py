@@ -38,7 +38,7 @@ _BUILTIN_SERVERS: dict[str, dict[str, Any]] = {
         "url": "https://azure-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
         "headers": {"Authorization": "Bearer ${MCP_API_KEY}"},
         "tools": ["*"],
-        "enabled": True,
+        "enabled": False,
         "builtin": True,
         "description": "Manage Azure resources via the Azure MCP Server",
     },
