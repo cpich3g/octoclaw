@@ -33,7 +33,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${MCP_PORT}/healthz || exit 1
 
-# Entrypoint: run supergateway wrapping the stdio MCP server
+# Entrypoint and auth proxy
+COPY auth-proxy.js /auth-proxy.js
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
