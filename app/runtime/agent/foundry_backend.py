@@ -1,7 +1,8 @@
-"""Foundry backend -- Azure OpenAI direct API calls via the openai SDK.
+"""Foundry backend -- Azure OpenAI Responses API via the openai SDK.
 
-Alternative to CopilotBackend. Supports streaming, tool calling,
-conversation history, reasoning tokens, and MCP server integration.
+Alternative to CopilotBackend. Uses the Responses API for streaming,
+native reasoning summaries, function tool calling, and MCP server
+integration (via client-side McpClientManager for stdio/SSE servers).
 Uses DefaultAzureCredential for MI auth or API key.
 """
 
@@ -20,6 +21,7 @@ from .mcp_client import McpClientManager
 logger = logging.getLogger(__name__)
 
 RESPONSE_TIMEOUT = 120.0
+API_VERSION = "2025-03-01-preview"
 
 
 def _get_openai_client() -> Any:
@@ -37,7 +39,7 @@ def _get_openai_client() -> Any:
         return AsyncAzureOpenAI(
             azure_endpoint=endpoint,
             api_key=api_key,
-            api_version="2024-12-01-preview",
+            api_version=API_VERSION,
         )
 
     # MI auth via azure-identity
@@ -50,27 +52,30 @@ def _get_openai_client() -> Any:
     return AsyncAzureOpenAI(
         azure_endpoint=endpoint,
         azure_ad_token_provider=token_provider,
-        api_version="2024-12-01-preview",
+        api_version=API_VERSION,
     )
 
 
-def _tools_to_openai_format(tools: list[Any]) -> list[dict]:
-    """Convert @define_tool decorated functions to OpenAI function calling format."""
-    openai_tools: list[dict] = []
+def _tools_to_responses_format(tools: list[Any]) -> list[dict]:
+    """Convert @define_tool functions to Responses API FunctionToolParam format.
+
+    Responses API uses a flat structure: {"type": "function", "name": ...,
+    "description": ..., "parameters": ...} -- NOT the nested Chat Completions
+    format {"type": "function", "function": {"name": ...}}.
+    """
+    result: list[dict] = []
     for tool in tools:
         name = getattr(tool, "name", None) or getattr(tool, "__name__", "unknown")
         description = getattr(tool, "description", "") or ""
         schema = getattr(tool, "parameters_schema", None)
 
         if schema is None:
-            # Try Pydantic model from explicit attribute or type annotations
             params_model = getattr(tool, "params_model", None)
             if params_model is None:
-                # Inspect the original function's type hints
                 fn = getattr(tool, "__wrapped__", tool)
                 hints = getattr(fn, "__annotations__", {})
-                for param_name, param_type in hints.items():
-                    if param_name != "return" and hasattr(param_type, "model_json_schema"):
+                for _, param_type in hints.items():
+                    if hasattr(param_type, "model_json_schema"):
                         params_model = param_type
                         break
             if params_model and hasattr(params_model, "model_json_schema"):
@@ -78,19 +83,37 @@ def _tools_to_openai_format(tools: list[Any]) -> list[dict]:
             else:
                 schema = {"type": "object", "properties": {}}
 
-        openai_tools.append({
+        result.append({
             "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": schema,
-            },
+            "name": name,
+            "description": description,
+            "parameters": schema,
+            "strict": False,
         })
-    return openai_tools
+    return result
+
+
+def _mcp_tools_to_responses_format(mcp_tools: list[dict]) -> list[dict]:
+    """Convert McpClientManager's OpenAI-format tools to Responses API format.
+
+    MCP client returns Chat Completions format (nested). We flatten to
+    Responses API format.
+    """
+    result: list[dict] = []
+    for t in mcp_tools:
+        fn = t.get("function", {})
+        result.append({
+            "type": "function",
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+            "strict": False,
+        })
+    return result
 
 
 class FoundrySession:
-    """Conversation session backed by message history, with MCP support."""
+    """Conversation session using Responses API with previous_response_id chaining."""
 
     def __init__(
         self,
@@ -100,28 +123,25 @@ class FoundrySession:
         mcp_manager: McpClientManager | None = None,
     ) -> None:
         self.model = model
-        self.tools = tools
+        self.instructions = system_message
         self.mcp_manager = mcp_manager
+        self.previous_response_id: str | None = None
+
+        # Build tool map for local execution
         self._tool_map: dict[str, Any] = {}
         for t in tools:
             name = getattr(t, "name", None) or getattr(t, "__name__", "unknown")
             self._tool_map[name] = t
-        self.messages: list[dict[str, Any]] = []
-        if system_message:
-            self.messages.append({"role": "system", "content": system_message})
 
-        # Combine @define_tool tools + MCP tools
-        self.openai_tools = _tools_to_openai_format(tools) if tools else []
+        # Build Responses API tool definitions
+        self.response_tools = _tools_to_responses_format(tools) if tools else []
         if mcp_manager:
-            self.openai_tools.extend(mcp_manager.openai_tools)
+            self.response_tools.extend(
+                _mcp_tools_to_responses_format(mcp_manager.openai_tools)
+            )
 
     async def call_tool(self, name: str, arguments: str) -> str:
-        """Execute a tool by name with JSON arguments string.
-
-        Routes to MCP servers first, then falls back to @define_tool handlers
-        and plain callables.
-        """
-        # MCP tools take priority (they are session-scoped server connections)
+        """Execute a tool by name. Routes MCP first, then local tools."""
         if self.mcp_manager and self.mcp_manager.has_tool(name):
             return await self.mcp_manager.call_tool(name, arguments)
 
@@ -131,7 +151,6 @@ class FoundrySession:
         try:
             args = json.loads(arguments) if arguments else {}
 
-            # @define_tool SDK tools expose an async .handler(invocation)
             handler = getattr(tool_fn, "handler", None)
             if handler and asyncio.iscoroutinefunction(handler):
                 invocation = {
@@ -143,7 +162,6 @@ class FoundrySession:
                 raw = await handler(invocation)
                 return raw.get("textResultForLlm", json.dumps(raw))
 
-            # Fallback: plain callable with Pydantic params
             params_model = getattr(tool_fn, "params_model", None)
             if params_model:
                 params = params_model(**args)
@@ -163,7 +181,7 @@ class FoundrySession:
 
 
 class FoundryBackend(AgentBackend):
-    """Azure OpenAI direct API backend."""
+    """Azure OpenAI backend using the Responses API."""
 
     def __init__(self) -> None:
         self._client: Any = None
@@ -187,7 +205,6 @@ class FoundryBackend(AgentBackend):
         system_content = system_msg.get("content", "") if isinstance(system_msg, dict) else ""
         tools = config.get("tools", [])
 
-        # Start MCP servers if configured
         mcp_manager: McpClientManager | None = None
         mcp_servers = config.get("mcp_servers")
         if mcp_servers:
@@ -214,78 +231,84 @@ class FoundryBackend(AgentBackend):
             raise RuntimeError("FoundryBackend not started")
 
         sess: FoundrySession = session
-        sess.messages.append({"role": "user", "content": prompt})
 
-        # Tool call loop: keep calling the model until it stops requesting tools
+        input_items: list[dict[str, Any]] = [
+            {"role": "user", "content": prompt},
+        ]
+
         max_tool_rounds = 10
-        for _ in range(max_tool_rounds):
+        full_text = ""
+
+        for round_num in range(max_tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": sess.model,
-                "messages": sess.messages,
+                "input": input_items,
                 "stream": True,
+                "reasoning": {"summary": "auto"},
             }
-            if sess.openai_tools:
-                kwargs["tools"] = sess.openai_tools
+            if sess.instructions and round_num == 0:
+                kwargs["instructions"] = sess.instructions
+            if sess.response_tools:
+                kwargs["tools"] = sess.response_tools
+            if sess.previous_response_id and round_num == 0:
+                kwargs["previous_response_id"] = sess.previous_response_id
 
             full_text = ""
-            tool_calls: list[dict[str, Any]] = []
+            pending_tool_calls: list[dict[str, str]] = []
 
-            stream = await self._client.chat.completions.create(**kwargs)
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
+            stream = await self._client.responses.create(**kwargs)
+            async for event in stream:
+                etype = event.type
 
-                # Reasoning/thinking tokens (Azure OpenAI extra field)
-                reasoning = getattr(delta, "reasoning_content", None)
-                if reasoning and on_event:
-                    on_event("reasoning", {"text": reasoning})
-
-                # Text content
-                if delta.content:
-                    full_text += delta.content
+                if etype == "response.output_text.delta":
+                    full_text += event.delta
                     if on_delta:
-                        on_delta(delta.content)
+                        on_delta(event.delta)
 
-                # Tool calls (streamed incrementally)
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        while len(tool_calls) <= tc.index:
-                            tool_calls.append({"id": "", "name": "", "arguments": ""})
-                        entry = tool_calls[tc.index]
-                        if tc.id:
-                            entry["id"] = tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                entry["name"] = tc.function.name
-                            if tc.function.arguments:
-                                entry["arguments"] += tc.function.arguments
+                elif etype == "response.reasoning_summary_text.delta":
+                    if on_event:
+                        on_event("reasoning", {"text": event.delta})
 
-            if not tool_calls:
-                # No tools requested — we're done
-                sess.messages.append({"role": "assistant", "content": full_text})
+                elif etype == "response.output_item.done":
+                    item = event.item
+                    if getattr(item, "type", None) == "function_call":
+                        pending_tool_calls.append({
+                            "call_id": item.call_id,
+                            "name": item.name,
+                            "arguments": item.arguments,
+                        })
+
+                elif etype == "response.completed":
+                    sess.previous_response_id = event.response.id
+
+            if not pending_tool_calls:
                 return full_text
 
-            # Execute tool calls
-            assistant_msg: dict[str, Any] = {"role": "assistant", "content": full_text or None, "tool_calls": []}
-            for tc in tool_calls:
-                assistant_msg["tool_calls"].append({
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                })
-            sess.messages.append(assistant_msg)
+            # Execute function tools and build input for next round
+            input_items = []
+            for tc in pending_tool_calls:
+                if on_event:
+                    on_event("tool_start", {"tool": tc["name"], "call_id": tc["call_id"]})
 
-            for tc in tool_calls:
-                if on_event:
-                    on_event("tool_start", {"tool": tc["name"], "call_id": tc["id"]})
                 result = await sess.call_tool(tc["name"], tc["arguments"])
+
                 if on_event:
-                    on_event("tool_done", {"tool": tc["name"], "call_id": tc["id"], "result": result[:500]})
-                sess.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
+                    on_event("tool_done", {
+                        "tool": tc["name"],
+                        "call_id": tc["call_id"],
+                        "result": result[:500],
+                    })
+
+                input_items.append({
+                    "type": "function_call",
+                    "call_id": tc["call_id"],
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                })
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": tc["call_id"],
+                    "output": result,
                 })
 
         logger.warning("[foundry] max tool rounds (%d) exceeded", max_tool_rounds)
@@ -319,7 +342,6 @@ class FoundryBackend(AgentBackend):
             await cred.close()
             headers = {"Authorization": f"Bearer {token.token}"}
 
-            # Find the Cognitive Services account to get its resource group
             find_url = (
                 f"https://management.azure.com/subscriptions/{sub_id}"
                 f"/resources?$filter=resourceType eq 'Microsoft.CognitiveServices/accounts'"
@@ -330,7 +352,6 @@ class FoundryBackend(AgentBackend):
                 resp.raise_for_status()
                 resources = resp.json().get("value", [])
 
-            # Match by account name in the resource ID
             resource_id = None
             for r in resources:
                 if r.get("name", "").lower() == account.lower():
@@ -341,7 +362,6 @@ class FoundryBackend(AgentBackend):
                 logger.warning("[foundry] could not find resource for %s", account)
                 return []
 
-            # List deployments
             deploy_url = (
                 f"https://management.azure.com{resource_id}"
                 f"/deployments?api-version=2024-10-01"
@@ -376,19 +396,24 @@ class FoundryBackend(AgentBackend):
     ) -> str | None:
         if not self._client:
             self._client = _get_openai_client()
-        messages: list[dict[str, Any]] = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
         try:
+            kwargs: dict[str, Any] = {
+                "model": model or cfg.copilot_model,
+                "input": prompt,
+            }
+            if system_message:
+                kwargs["instructions"] = system_message
             resp = await asyncio.wait_for(
-                self._client.chat.completions.create(
-                    model=model or cfg.copilot_model,
-                    messages=messages,
-                ),
+                self._client.responses.create(**kwargs),
                 timeout=timeout,
             )
-            return resp.choices[0].message.content if resp.choices else None
+            # Extract text from output items
+            for item in resp.output:
+                if getattr(item, "type", None) == "message":
+                    for part in item.content:
+                        if getattr(part, "type", None) == "output_text":
+                            return part.text
+            return None
         except Exception as exc:
             logger.error("[foundry] one-shot failed: %s", exc)
             return None
