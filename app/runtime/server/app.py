@@ -115,7 +115,7 @@ def create_adapter() -> BotFrameworkAdapter:
 # ---------------------------------------------------------------------------
 
 _PUBLIC_PREFIXES = ("/health", "/api/messages", "/acs", "/realtime-acs", "/api/voice/acs-callback", "/api/voice/media-streaming")
-_PUBLIC_EXACT = ("/api/auth/check",)
+_PUBLIC_EXACT = ("/api/auth/check", "/api/auth/login")
 
 _TUNNEL_ALLOWED_PREFIXES = (
     "/health",
@@ -382,7 +382,25 @@ class AppFactory:
             ok = auth == f"Bearer {cfg.admin_secret}"
             return web.json_response({"authenticated": ok})
 
+        async def auth_login(req: web.Request) -> web.Response:
+            """Validate username+password credentials, return admin secret."""
+            if not (cfg.admin_user and cfg.admin_password):
+                return web.json_response(
+                    {"status": "error", "message": "Username/password login not configured"},
+                    status=400,
+                )
+            body = await req.json()
+            username = body.get("username", "").strip()
+            password = body.get("password", "")
+            if username == cfg.admin_user and password == cfg.admin_password:
+                return web.json_response({"status": "ok", "token": cfg.admin_secret})
+            return web.json_response(
+                {"status": "error", "message": "Invalid username or password"},
+                status=401,
+            )
+
         router.add_post("/api/auth/check", auth_check)
+        router.add_post("/api/auth/login", auth_login)
 
         SetupRoutes(
             self._az, self._gh, self._tunnel, self._deployer,

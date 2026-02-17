@@ -116,6 +116,8 @@ class Settings:
         self.acs_resource_id: str = self._derive_acs_resource_id()
 
         self.admin_secret: str = e("ADMIN_SECRET")
+        self.admin_user: str = e("ADMIN_USER")
+        self.admin_password: str = e("ADMIN_PASSWORD")
 
         self.memory_model: str = e("MEMORY_MODEL") or "claude-sonnet-4-20250514"
         self.memory_idle_minutes: int = int(e("MEMORY_IDLE_MINUTES") or "5")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -110,18 +111,43 @@ class FoundryIQConfigStore:
         self._save()
 
     def _load(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            raw = json.loads(self._path.read_text())
-            for k in FoundryIQConfig.__dataclass_fields__:
-                if k in raw:
-                    value = raw[k]
-                    if k in self._SECRET_FIELDS and isinstance(value, str):
-                        value = self._resolve_secret(value)
-                    setattr(self._config, k, value)
-        except Exception as exc:
-            logger.warning("Failed to load Foundry IQ config from %s: %s", self._path, exc)
+        if self._path.exists():
+            try:
+                raw = json.loads(self._path.read_text())
+                for k in FoundryIQConfig.__dataclass_fields__:
+                    if k in raw:
+                        value = raw[k]
+                        if k in self._SECRET_FIELDS and isinstance(value, str):
+                            value = self._resolve_secret(value)
+                        setattr(self._config, k, value)
+                return
+            except Exception as exc:
+                logger.warning("Failed to load Foundry IQ config from %s: %s", self._path, exc)
+
+        # Fall back to env vars when no config file exists (e.g. ACA without persistent storage)
+        self._load_from_env()
+
+    # Env var mapping: FOUNDRY_IQ_<FIELD_UPPER> → config field
+    _ENV_MAP: dict[str, str] = {
+        "FOUNDRY_IQ_SEARCH_ENDPOINT": "search_endpoint",
+        "FOUNDRY_IQ_SEARCH_API_KEY": "search_api_key",
+        "FOUNDRY_IQ_EMBEDDING_ENDPOINT": "embedding_endpoint",
+        "FOUNDRY_IQ_EMBEDDING_API_KEY": "embedding_api_key",
+        "FOUNDRY_IQ_EMBEDDING_MODEL": "embedding_model",
+        "FOUNDRY_IQ_INDEX_NAME": "index_name",
+    }
+
+    def _load_from_env(self) -> None:
+        any_set = False
+        for env_key, field in self._ENV_MAP.items():
+            val = os.getenv(env_key, "")
+            if val:
+                setattr(self._config, field, val)
+                any_set = True
+        if any_set:
+            self._config.enabled = True
+            self._config.provisioned = True
+            logger.info("Foundry IQ config loaded from environment variables")
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

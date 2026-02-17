@@ -1116,6 +1116,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .login-card__subtitle { color: var(--text-3); font-size: 13px; margin-bottom: 24px; }
 .login-card__form { display: flex; flex-direction: column; gap: 12px; }
 .login-card__form .input { text-align: center; }
+.login-card__error { color: var(--red, #ef4444); font-size: 13px; margin: 0; }
 
 /* ── Disclaimer ── */
 .disclaimer-overlay { position: fixed; inset: 0; background: var(--black); display: flex; align-items: center; justify-content: center; z-index: 2000; }
