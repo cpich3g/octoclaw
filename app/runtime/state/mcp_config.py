@@ -17,13 +17,8 @@ logger = logging.getLogger(__name__)
 
 _BUILTIN_SERVERS: dict[str, dict[str, Any]] = {
     "playwright": {
-        "type": "local",
-        "command": "npx",
-        "args": [
-            "-y", "@playwright/mcp@latest", "--browser", "chromium",
-            "--headless", "--isolated", "--viewport-size", "1366x768",
-        ],
-        "env": {"PLAYWRIGHT_CHROMIUM_ARGS": "--no-sandbox --disable-setuid-sandbox"},
+        "type": "http",
+        "url": "https://playwright-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
         "tools": ["*"],
         "enabled": True,
         "builtin": True,
@@ -38,14 +33,20 @@ _BUILTIN_SERVERS: dict[str, dict[str, Any]] = {
         "description": "Search and fetch official Microsoft Learn documentation",
     },
     "azure-mcp-server": {
-        "type": "local",
-        "command": "npx",
-        "args": ["-y", "@azure/mcp@latest", "server", "start"],
-        "env": {"DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1"},
+        "type": "http",
+        "url": "https://azure-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
         "tools": ["*"],
-        "enabled": False,
+        "enabled": True,
         "builtin": True,
-        "description": "Manage Azure resources via the Azure MCP Server (requires az login)",
+        "description": "Manage Azure resources via the Azure MCP Server",
+    },
+    "sequential-thinking": {
+        "type": "http",
+        "url": "https://seqthink-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
+        "tools": ["*"],
+        "enabled": True,
+        "builtin": True,
+        "description": "Sequential thinking and reasoning for complex problem solving",
     },
     "github-mcp-server": {
         "type": "local",
@@ -187,7 +188,8 @@ class McpConfigStore:
                 if name not in self._servers:
                     self._servers[name] = dict(builtin)
                     dirty = True
-                elif self._servers[name].get("builtin", False):
+                else:
+                    # Always sync builtin definitions; preserve user's enabled flag
                     user_enabled = self._servers[name].get("enabled", builtin.get("enabled", True))
                     self._servers[name] = dict(builtin)
                     self._servers[name]["enabled"] = user_enabled
