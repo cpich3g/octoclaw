@@ -535,6 +535,10 @@ class AppFactory:
             logger.info("Lock Down Mode active -- skipping infrastructure provisioning")
             return
 
+        if cfg.is_managed_identity:
+            logger.info("Managed Identity mode -- skipping az-CLI bot provisioning")
+            return
+
         if not self._infra_store.bot_configured:
             return
 
@@ -585,6 +589,8 @@ class AppFactory:
 
         if cfg.lockdown_mode:
             logger.info("Lock Down Mode active -- skipping shutdown decommission")
+        elif cfg.is_managed_identity:
+            logger.info("Managed Identity mode -- skipping shutdown decommission")
         elif self._infra_store.bot_configured and cfg.env.read("BOT_NAME"):
             logger.info("Shutdown: decommissioning infrastructure ...")
             steps = await run_sync(self._provisioner.decommission)
