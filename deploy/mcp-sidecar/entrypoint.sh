@@ -23,6 +23,7 @@ if [ -n "${MCP_API_KEY:-}" ]; then
         --streamableHttpPath "/mcp" \
         --healthEndpoint /healthz \
         --cors \
+        --stateful \
         --logLevel info &
 
     # Wait for supergateway to be ready
@@ -39,5 +40,6 @@ else
         --streamableHttpPath "/mcp" \
         --healthEndpoint /healthz \
         --cors \
+        --stateful \
         --logLevel info
 fi

@@ -36,13 +36,22 @@ const server = http.createServer((req, res) => {
     }
   );
 
+  // No timeout — SSE connections are long-lived
+  proxyReq.setTimeout(0);
+
   proxyReq.on("error", (err) => {
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Backend unavailable" }));
+    if (!res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Backend unavailable" }));
+    }
   });
 
   req.pipe(proxyReq, { end: true });
 });
+
+// No server timeout for SSE streaming
+server.timeout = 0;
+server.keepAliveTimeout = 0;
 
 server.listen(PUBLIC_PORT, () => {
   console.log(`Auth proxy listening on :${PUBLIC_PORT} → :${INTERNAL_PORT}`);
