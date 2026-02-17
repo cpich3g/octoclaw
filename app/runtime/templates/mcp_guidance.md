@@ -8,6 +8,13 @@
 
 **Azure MCP Server** (local) -- Direct management of Azure cloud resources. Use this when the user asks you to list, create, update, or delete Azure resources (resource groups, storage accounts, VMs, App Services, Cosmos DB, Key Vault, etc.), query Azure Resource Graph, manage deployments, or inspect Azure subscriptions. Authenticated via the local `az login` session. Prefer this over shell `az` commands when available -- it gives the AI structured, tool-call access to Azure.
 
+This server also provides **Agentic RAG** via Azure AI Search Knowledge Bases. Use the `knowledge_retrieve` tool to search these knowledge bases. Always pass `service: ai-search-openfda` and the appropriate `knowledge_base` name below. Query one KB at a time for focused results.
+
+Available Knowledge Bases (service: `ai-search-openfda`):
+- **bmw-kb** -- BMW product knowledge. Use for questions about BMW vehicles, models, features, specifications, or related automotive topics.
+- **openfda-kb-01** -- FDA pharmaceutical data. Contains labelling and safety data for most pharma drugs as per FDA. Use for questions about drug labels, safety information, side effects, contraindications, or FDA-regulated pharmaceutical data. This is the most comprehensive pharma KB.
+- **slidefinder-kb** -- Presentation and slide content. Use for questions about slide decks, presentations, session content, or when searching for specific presentation material.
+
 ---
 
 **GitHub MCP Server** (local) -- Full GitHub API integration. Use this when the user asks about repositories, issues, pull requests, commits, branches, releases, GitHub Actions workflows, code search, or any GitHub operation. Prefer this over `gh` CLI or raw API calls -- it exposes structured tools for listing repos, creating issues, reviewing PRs, searching code, managing labels, and more.
