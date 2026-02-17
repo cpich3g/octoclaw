@@ -25,12 +25,21 @@ if [ -n "${MCP_API_KEY:-}" ]; then
         --cors \
         --stateful \
         --logLevel info &
+    SG_PID=$!
 
     # Wait for supergateway to be ready
     sleep 2
 
-    # Run auth proxy on the public port
-    exec node /auth-proxy.js
+    # Run auth proxy in background
+    node /auth-proxy.js &
+    PROXY_PID=$!
+
+    # If either process exits, kill the other and exit (so ACA restarts the container)
+    trap "kill $SG_PID $PROXY_PID 2>/dev/null; exit 1" TERM INT
+    wait -n $SG_PID $PROXY_PID 2>/dev/null
+    echo "Process exited, shutting down..."
+    kill $SG_PID $PROXY_PID 2>/dev/null
+    exit 1
 else
     # No auth — run supergateway directly
     exec supergateway \
