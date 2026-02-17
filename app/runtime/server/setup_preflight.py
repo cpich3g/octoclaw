@@ -258,8 +258,8 @@ class PreflightRoutes:
             res_id = cfg.acs_resource_id
             sub.append({
                 "name": "acs_resource_id",
-                "ok": bool(res_id),
-                "detail": f"Resource ID: {res_id}" if res_id else "Cannot derive",
+                "ok": True,
+                "detail": f"Resource ID: {res_id}" if res_id else "Pending (auto-learns from first ACS callback)",
             })
 
         all_ok = all(s["ok"] for s in sub)

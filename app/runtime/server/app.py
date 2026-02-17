@@ -555,6 +555,8 @@ class AppFactory:
 
         if cfg.is_managed_identity:
             logger.info("Managed Identity mode -- skipping az-CLI bot provisioning")
+            # Still initialise the tunnel/ingress URL so ACS callbacks work
+            self._tunnel.start(cfg.admin_port)
             return
 
         if not self._infra_store.bot_configured:
