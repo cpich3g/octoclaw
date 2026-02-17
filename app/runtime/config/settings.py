@@ -96,6 +96,9 @@ class Settings:
 
         self.github_token: str = e("GITHUB_TOKEN")
 
+        # Agent backend: "copilot" (default) or "foundry" (Azure OpenAI direct)
+        self.agent_backend: str = (e("AGENT_BACKEND") or "copilot").lower()
+
         self.copilot_model: str = e("COPILOT_MODEL") or "claude-sonnet-4-20250514"
         self.copilot_agent: str = e("COPILOT_AGENT") or ""
 

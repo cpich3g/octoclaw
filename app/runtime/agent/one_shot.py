@@ -1,17 +1,16 @@
-"""One-shot Copilot session runner.
+"""One-shot session runner.
 
-Spawns an ephemeral CopilotClient to execute a single prompt. Used by the
+Spawns an ephemeral session to execute a single prompt. Used by the
 scheduler and memory formation to avoid re-using the interactive session.
+
+Delegates to the active AgentBackend (copilot or foundry) via
+:func:`_get_backend`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
-
-from copilot import CopilotClient
-from copilot.generated.session_events import SessionEventType
 
 from ..config.settings import cfg
 
@@ -22,6 +21,16 @@ async def auto_approve(input_data: dict, invocation: dict) -> dict:
     return {"permissionDecision": "allow"}
 
 
+def _get_backend():
+    """Return a fresh backend instance based on config."""
+    backend_name = cfg.agent_backend
+    if backend_name == "foundry":
+        from .foundry_backend import FoundryBackend
+        return FoundryBackend()
+    from .copilot_backend import CopilotBackend
+    return CopilotBackend()
+
+
 async def run_one_shot(
     prompt: str,
     *,
@@ -30,51 +39,18 @@ async def run_one_shot(
     timeout: float = 300,
     tools: list[Any] | None = None,
 ) -> str | None:
-    opts: dict[str, Any] = {"log_level": "error"}
-    if cfg.github_token:
-        opts["github_token"] = cfg.github_token
-
-    client = CopilotClient(opts)
-    await client.start()
+    backend = _get_backend()
+    await backend.start()
     try:
-        session_cfg: dict[str, Any] = {
-            "model": model,
-            "hooks": {"on_pre_tool_use": auto_approve},
-        }
-        if system_message:
-            session_cfg["system_message"] = {"mode": "append", "content": system_message}
-        if tools:
-            session_cfg["tools"] = tools
-        session = await client.create_session(session_cfg)
-        return await _send_and_wait(session, prompt, timeout)
+        return await backend.run_one_shot(
+            prompt,
+            model=model,
+            system_message=system_message,
+            timeout=timeout,
+            tools=tools,
+        )
     finally:
-        await _safe_stop(client)
-
-
-async def _send_and_wait(session: Any, prompt: str, timeout: float) -> str | None:
-    final_text: str | None = None
-    done = asyncio.Event()
-
-    def on_event(event: Any) -> None:
-        nonlocal final_text
-        if event.type == SessionEventType.ASSISTANT_MESSAGE:
-            final_text = event.data.content
-        elif event.type in (SessionEventType.SESSION_IDLE, SessionEventType.SESSION_ERROR):
-            done.set()
-
-    session.on(on_event)
-    await session.send({"prompt": prompt})
-    await asyncio.wait_for(done.wait(), timeout=timeout)
-
-    try:
-        await session.destroy()
-    except Exception:
-        pass
-    return final_text
-
-
-async def _safe_stop(client: CopilotClient) -> None:
-    try:
-        await client.stop()
-    except Exception:
-        logger.debug("Error stopping client", exc_info=True)
+        try:
+            await backend.stop()
+        except Exception:
+            logger.debug("Error stopping one-shot backend", exc_info=True)

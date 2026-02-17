@@ -1,3 +1,3 @@
-"""Core Copilot SDK integration -- agent, sessions, tools, and prompts."""
+"""Agent backend abstraction -- supports Copilot SDK and Azure OpenAI."""
 
-__all__ = ["Agent", "auto_approve", "run_one_shot"]
+__all__ = ["Agent", "AgentBackend", "auto_approve", "run_one_shot"]
