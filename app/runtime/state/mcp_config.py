@@ -19,6 +19,7 @@ _BUILTIN_SERVERS: dict[str, dict[str, Any]] = {
     "playwright": {
         "type": "http",
         "url": "https://playwright-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
+        "headers": {"Authorization": "Bearer ${MCP_API_KEY}"},
         "tools": ["*"],
         "enabled": True,
         "builtin": True,
@@ -35,6 +36,7 @@ _BUILTIN_SERVERS: dict[str, dict[str, Any]] = {
     "azure-mcp-server": {
         "type": "http",
         "url": "https://azure-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
+        "headers": {"Authorization": "Bearer ${MCP_API_KEY}"},
         "tools": ["*"],
         "enabled": True,
         "builtin": True,
@@ -43,6 +45,7 @@ _BUILTIN_SERVERS: dict[str, dict[str, Any]] = {
     "sequential-thinking": {
         "type": "http",
         "url": "https://seqthink-mcp.politedune-c19de043.swedencentral.azurecontainerapps.io/mcp",
+        "headers": {"Authorization": "Bearer ${MCP_API_KEY}"},
         "tools": ["*"],
         "enabled": True,
         "builtin": True,

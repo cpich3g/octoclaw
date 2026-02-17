@@ -9,6 +9,12 @@ STDIO_CMD="${MCP_COMMAND} ${MCP_ARGS}"
 echo "MCP Sidecar starting..."
 echo "  Command: ${STDIO_CMD}"
 echo "  Port: ${MCP_PORT}"
+echo "  Auth: ${MCP_API_KEY:+enabled}"
+
+AUTH_ARGS=""
+if [ -n "${MCP_API_KEY:-}" ]; then
+    AUTH_ARGS="--oauth2Bearer ${MCP_API_KEY}"
+fi
 
 exec supergateway \
     --stdio "${STDIO_CMD}" \
@@ -17,4 +23,5 @@ exec supergateway \
     --streamableHttpPath "/mcp" \
     --healthEndpoint /healthz \
     --cors \
-    --logLevel info
+    --logLevel info \
+    ${AUTH_ARGS}

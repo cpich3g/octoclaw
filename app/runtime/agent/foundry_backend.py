@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -229,7 +231,15 @@ class FoundryBackend(AgentBackend):
                     "require_approval": "never",
                 }
                 if srv.get("headers"):
-                    tool_def["headers"] = srv["headers"]
+                    # Resolve ${ENV_VAR} placeholders in header values
+                    resolved = {}
+                    for hk, hv in srv["headers"].items():
+                        resolved[hk] = re.sub(
+                            r"\$\{(\w+)\}",
+                            lambda m: os.environ.get(m.group(1), ""),
+                            hv,
+                        )
+                    tool_def["headers"] = resolved
                 if srv.get("description"):
                     tool_def["server_description"] = srv["description"]
                 native_mcp_tools.append(tool_def)
