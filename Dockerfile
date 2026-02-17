@@ -35,6 +35,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Azure CLI (for automated bot provisioning)
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
+# uv (for uvx-based MCP servers like f1-mcp)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
+    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx
+
 WORKDIR /app
 
 # Install Python deps first (cached unless pyproject.toml changes)
