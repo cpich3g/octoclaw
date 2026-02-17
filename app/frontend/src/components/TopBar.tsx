@@ -34,7 +34,7 @@ export default function TopBar({ onTogglePanel }: Props) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const agentName = profile?.name || 'octoclaw'
+  const agentName = profile?.name || 'J.A.R.V.I.S'
 
   const go = (path: string) => {
     navigate(path)

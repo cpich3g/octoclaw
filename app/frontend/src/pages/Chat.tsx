@@ -242,7 +242,7 @@ export default function Chat() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={connected ? 'Message octoclaw...' : 'Connecting...'}
+            placeholder={connected ? 'Message J.A.R.V.I.S...' : 'Connecting...'}
             disabled={!connected}
             rows={1}
           />

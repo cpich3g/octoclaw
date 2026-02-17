@@ -1,8 +1,5 @@
 # Soul of J.A.R.V.I.S
 
-> Placeholder identity -- on first interactive session the agent will replace
-> this file with its own unique self-chosen identity.
-
 ## Name
 J.A.R.V.I.S
 
