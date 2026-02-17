@@ -1,7 +1,7 @@
 """Foundry backend -- Azure OpenAI direct API calls via the openai SDK.
 
-Lightweight alternative to CopilotBackend. No subprocess, no MCP servers,
-no skills. Supports streaming, tool calling, and conversation history.
+Alternative to CopilotBackend. Supports streaming, tool calling,
+conversation history, reasoning tokens, and MCP server integration.
 Uses DefaultAzureCredential for MI auth or API key.
 """
 
@@ -15,6 +15,7 @@ from typing import Any
 
 from ..config.settings import cfg
 from .backend import AgentBackend
+from .mcp_client import McpClientManager
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +90,18 @@ def _tools_to_openai_format(tools: list[Any]) -> list[dict]:
 
 
 class FoundrySession:
-    """Lightweight conversation session backed by message history."""
+    """Conversation session backed by message history, with MCP support."""
 
-    def __init__(self, model: str, system_message: str, tools: list[Any]) -> None:
+    def __init__(
+        self,
+        model: str,
+        system_message: str,
+        tools: list[Any],
+        mcp_manager: McpClientManager | None = None,
+    ) -> None:
         self.model = model
         self.tools = tools
+        self.mcp_manager = mcp_manager
         self._tool_map: dict[str, Any] = {}
         for t in tools:
             name = getattr(t, "name", None) or getattr(t, "__name__", "unknown")
@@ -101,14 +109,22 @@ class FoundrySession:
         self.messages: list[dict[str, Any]] = []
         if system_message:
             self.messages.append({"role": "system", "content": system_message})
+
+        # Combine @define_tool tools + MCP tools
         self.openai_tools = _tools_to_openai_format(tools) if tools else []
+        if mcp_manager:
+            self.openai_tools.extend(mcp_manager.openai_tools)
 
     async def call_tool(self, name: str, arguments: str) -> str:
         """Execute a tool by name with JSON arguments string.
 
-        Supports both @define_tool handlers (async, invocation dict) and
-        plain callables with Pydantic params.
+        Routes to MCP servers first, then falls back to @define_tool handlers
+        and plain callables.
         """
+        # MCP tools take priority (they are session-scoped server connections)
+        if self.mcp_manager and self.mcp_manager.has_tool(name):
+            return await self.mcp_manager.call_tool(name, arguments)
+
         tool_fn = self._tool_map.get(name)
         if not tool_fn:
             return json.dumps({"error": f"Unknown tool: {name}"})
@@ -125,7 +141,6 @@ class FoundrySession:
                     "arguments": args,
                 }
                 raw = await handler(invocation)
-                # Handler returns {"textResultForLlm": ..., "resultType": ...}
                 return raw.get("textResultForLlm", json.dumps(raw))
 
             # Fallback: plain callable with Pydantic params
@@ -171,7 +186,22 @@ class FoundryBackend(AgentBackend):
         system_msg = config.get("system_message", {})
         system_content = system_msg.get("content", "") if isinstance(system_msg, dict) else ""
         tools = config.get("tools", [])
-        return FoundrySession(model, system_content, tools)
+
+        # Start MCP servers if configured
+        mcp_manager: McpClientManager | None = None
+        mcp_servers = config.get("mcp_servers")
+        if mcp_servers:
+            mcp_manager = McpClientManager()
+            try:
+                await mcp_manager.start(mcp_servers)
+                logger.info("[foundry] MCP: %d tools from %d servers",
+                            len(mcp_manager.tool_names),
+                            len(mcp_manager._group.sessions) if mcp_manager._group else 0)
+            except Exception as exc:
+                logger.warning("[foundry] MCP startup failed: %s", exc)
+                mcp_manager = None
+
+        return FoundrySession(model, system_content, tools, mcp_manager)
 
     async def send(
         self,
@@ -262,7 +292,9 @@ class FoundryBackend(AgentBackend):
         return full_text
 
     async def destroy_session(self, session: Any) -> None:
-        pass  # No cleanup needed for in-memory sessions
+        sess: FoundrySession = session
+        if sess.mcp_manager:
+            await sess.mcp_manager.stop()
 
     async def list_models(self) -> list[dict]:
         """List deployed models via the Azure Resource Manager API.
