@@ -259,48 +259,35 @@ class FoundryBackend(AgentBackend):
         pass  # No cleanup needed for in-memory sessions
 
     async def list_models(self) -> list[dict]:
-        """List Azure OpenAI deployments (not model IDs).
+        """List available models from Azure OpenAI / AI Services.
 
-        The openai SDK's models.list() returns model IDs (e.g.
-        ``gpt-5.2-2025-12-11``) which can't be used for inference.
-        Azure OpenAI requires **deployment names**, so we call the
-        deployments REST endpoint directly.
+        For AIServices (Foundry) resources, the deployment name equals
+        the model name, so we can use the /openai/models endpoint directly.
+        We filter to only chat-capable models (exclude embeddings, tts, etc).
         """
         if not self._client:
             return []
         try:
-            import httpx
-
-            url = f"{cfg.azure_openai_endpoint.rstrip('/')}/openai/deployments?api-version=2024-12-01-preview"
-
-            # Reuse the client's auth — get a token
-            api_key = cfg.azure_openai_api_key
-            if api_key:
-                headers = {"api-key": api_key}
-            else:
-                from azure.identity.aio import DefaultAzureCredential
-                cred = DefaultAzureCredential()
-                token = await cred.get_token("https://cognitiveservices.azure.com/.default")
-                headers = {"Authorization": f"Bearer {token.token}"}
-                await cred.close()
-
-            async with httpx.AsyncClient() as http:
-                resp = await http.get(url, headers=headers, timeout=15)
-                resp.raise_for_status()
-                data = resp.json().get("data", [])
-
+            result = await self._client.models.list()
+            # Filter to chat-capable models only
+            skip_prefixes = (
+                "dall-e", "tts", "whisper", "text-embedding", "text-search",
+                "text-similarity", "code-search", "babbage", "curie", "davinci",
+                "ada", "gpt-35-turbo-instruct", "sora", "aoai-sora",
+                "gpt-image", "FLUX", "Stable-", "Cohere-embed",
+                "Cohere-rerank", "embed-", "gpt-realtime", "gpt-audio",
+                "gpt-4o-realtime", "gpt-4o-mini-realtime",
+                "gpt-4o-audio", "gpt-4o-mini-audio", "gpt-4o-mini-tts",
+                "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
+                "computer-use", "gpt-4o-canvas", "mistral-document",
+            )
             return [
-                {
-                    "id": d["id"],  # deployment name — this is what inference needs
-                    "name": f"{d['id']} ({d.get('model', '')})",
-                    "policy": "enabled",
-                }
-                for d in data
-                if d.get("id") and d.get("status") == "succeeded"
-                and not d.get("id", "").startswith("dall-e")
+                {"id": m.id, "name": m.id, "policy": "enabled"}
+                for m in result.data
+                if m.id and not any(m.id.startswith(p) for p in skip_prefixes)
             ]
         except Exception as exc:
-            logger.warning("[foundry] failed to list deployments: %s", exc)
+            logger.warning("[foundry] failed to list models: %s", exc)
             return []
 
     async def run_one_shot(
