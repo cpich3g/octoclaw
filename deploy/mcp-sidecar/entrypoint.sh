@@ -59,6 +59,7 @@ if [ -n "${MCP_API_KEY:-}" ]; then
         --healthEndpoint /healthz \
         --cors \
         --stateful \
+        --sessionTimeout 300 \
         --logLevel info 2>&1 &
     SG_PID=$!
 
@@ -94,5 +95,6 @@ else
         --healthEndpoint /healthz \
         --cors \
         --stateful \
+        --sessionTimeout 300 \
         --logLevel info
 fi

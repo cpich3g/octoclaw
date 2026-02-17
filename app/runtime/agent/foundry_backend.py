@@ -298,7 +298,24 @@ class FoundryBackend(AgentBackend):
             full_text = ""
             pending_tool_calls: list[dict[str, str]] = []
 
-            stream = await self._client.responses.create(**kwargs)
+            try:
+                stream = await self._client.responses.create(**kwargs)
+            except Exception as mcp_err:
+                err_str = str(mcp_err)
+                if "424" in err_str:
+                    logger.warning("[foundry] 424 Failed Dependency — native MCP server(s) unreachable, retrying without MCP tools")
+                    # Retry once without native MCP tools
+                    tools_no_mcp = [t for t in kwargs.get("tools", []) if t.get("type") != "mcp"]
+                    kwargs["tools"] = tools_no_mcp or None
+                    if not kwargs["tools"]:
+                        kwargs.pop("tools", None)
+                    try:
+                        stream = await self._client.responses.create(**kwargs)
+                    except Exception as retry_err:
+                        logger.error("[foundry] Retry without MCP also failed: %s", retry_err)
+                        raise retry_err
+                else:
+                    raise
             async for event in stream:
                 etype = event.type
 
