@@ -71,7 +71,7 @@ class McpClientManager:
             return
 
         from mcp import ClientSessionGroup, StdioServerParameters
-        from mcp.client.session_group import SseServerParameters
+        from mcp.client.session_group import SseServerParameters, StreamableHttpParameters
 
         self._exit_stack = contextlib.AsyncExitStack()
         await self._exit_stack.__aenter__()
@@ -87,8 +87,14 @@ class McpClientManager:
                         args=config.get("args", []),
                         env=config.get("env"),
                     )
-                elif server_type in ("http", "sse"):
+                elif server_type == "sse":
                     params = SseServerParameters(
+                        url=config["url"],
+                        headers=config.get("headers"),
+                    )
+                elif server_type == "http":
+                    # Modern Streamable HTTP transport (e.g. learn.microsoft.com/api/mcp)
+                    params = StreamableHttpParameters(
                         url=config["url"],
                         headers=config.get("headers"),
                     )
