@@ -302,13 +302,16 @@ class FoundryBackend(AgentBackend):
                 stream = await self._client.responses.create(**kwargs)
             except Exception as mcp_err:
                 err_str = str(mcp_err)
-                if "424" in err_str:
-                    logger.warning("[foundry] 424 Failed Dependency — native MCP server(s) unreachable, retrying without MCP tools")
-                    # Retry once without native MCP tools
+                if "424" in err_str or "429" in err_str:
+                    label = "424 Failed Dependency" if "424" in err_str else "429 Too Many Requests"
+                    logger.warning("[foundry] %s — retrying without native MCP tools", label)
                     tools_no_mcp = [t for t in kwargs.get("tools", []) if t.get("type") != "mcp"]
                     kwargs["tools"] = tools_no_mcp or None
                     if not kwargs["tools"]:
                         kwargs.pop("tools", None)
+                    # Brief pause for 429
+                    if "429" in err_str:
+                        await asyncio.sleep(2)
                     try:
                         stream = await self._client.responses.create(**kwargs)
                     except Exception as retry_err:
